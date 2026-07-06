@@ -44,21 +44,22 @@ input group "=== СТРАТЕГИЯ (СИГНАЛЫ) ==="
 input ENUM_TIMEFRAMES InpWorkTF    = PERIOD_M5;     // Рабочий таймфрейм (скальпинг)
 input ENUM_TIMEFRAMES InpTrendTF   = PERIOD_M15;    // Старший ТФ для MTF-фильтра
 input bool     InpUseMTFFilter     = false;         // Требовать совпадение тренда на старшем ТФ (для скальпинга выкл.)
-input int      InpEmaFast          = 5;             // EMA быстрая (скальпинг)
-input int      InpEmaSlow          = 13;            // EMA медленная (скальпинг)
+input int      InpEmaFast          = 8;             // EMA быстрая — тренд-биас (скальпинг M5)
+input int      InpEmaSlow          = 21;            // EMA медленная — тренд-биас
 input int      InpEmaTrend         = 50;            // EMA тренда (на старшем ТФ M15)
+input bool     InpUseRSI           = true;          // Фильтр RSI (перекупл./перепрод.)
 input int      InpRsiPeriod        = 7;             // Период RSI (быстрый для скальпинга)
-input double   InpRsiBuyMax        = 75.0;          // RSI: не покупать выше этого уровня
-input double   InpRsiSellMin       = 25.0;          // RSI: не продавать ниже этого уровня
+input double   InpRsiBuyMax        = 80.0;          // RSI: не покупать выше этого уровня
+input double   InpRsiSellMin       = 20.0;          // RSI: не продавать ниже этого уровня
 input int      InpAtrPeriod        = 14;            // Период ATR
 
 //--- Мультитаймфрейм и качество входа ------------------------------
 input group "=== MTF И КАЧЕСТВО ВХОДА ==="
 input ENUM_TIMEFRAMES InpTrendTF2  = PERIOD_H1;     // Второй старший ТФ (доп. подтверждение)
 input bool     InpUseTrendTF2      = false;         // Требовать совпадение тренда и на 2-м ТФ (для скальпинга выкл.)
-input bool     InpUseADX           = true;          // Фильтр силы тренда ADX (против флета)
+input bool     InpUseADX           = false;         // Фильтр силы тренда ADX (по умолч. ВЫКЛ — не блокирует)
 input int      InpADXPeriod        = 14;            // Период ADX
-input double   InpADXMinLevel      = 22.0;          // Мин. ADX для входа (ниже — флет, стоп)
+input double   InpADXMinLevel      = 18.0;          // Мин. ADX для входа (ниже — флет)
 input double   InpMinEmaGapPips    = 3.0;           // Мин. зазор между EMA при кроссе (пункты)
 
 //--- Скальпинг-индикаторы (доп. подтверждение входа) ---------------
@@ -69,7 +70,7 @@ input int      InpStochD           = 3;             // Стохастик %D
 input int      InpStochSlowing     = 3;             // Стохастик замедление
 input double   InpStochUpper       = 80.0;          // Верхний уровень (не покупать выше)
 input double   InpStochLower       = 20.0;          // Нижний уровень (не продавать ниже)
-input bool     InpUseMACD          = true;          // MACD: подтверждение направления импульса
+input bool     InpUseMACD          = false;         // MACD: подтверждение импульса (по умолч. ВЫКЛ)
 input int      InpMacdFast         = 12;            // MACD быстрая EMA
 input int      InpMacdSlow         = 26;            // MACD медленная EMA
 input int      InpMacdSignal       = 9;             // MACD сигнальная линия
@@ -84,8 +85,8 @@ input int      InpCooldownMinutes  = 90;            // Длительность 
 
 //--- Управление позицией / выход -----------------------------------
 input group "=== ВЫХОД / УПРАВЛЕНИЕ ПОЗИЦИЕЙ ==="
-input double   InpSL_ATR_Mult      = 1.5;           // Stop Loss = ATR * множитель (тесный для скальпинга)
-input double   InpTP_ATR_Mult      = 1.5;           // Take Profit = ATR * множитель (быстрая фиксация)
+input double   InpSL_ATR_Mult      = 1.5;           // Stop Loss = ATR * множитель
+input double   InpTP_ATR_Mult      = 2.0;           // Take Profit = ATR * множитель (асимметр. R:R ~1.33)
 input bool     InpUseTrailing      = true;          // Включить трейлинг-стоп
 input double   InpTrail_ATR_Mult   = 1.0;           // Дистанция трейлинга = ATR * множитель
 input bool     InpUseBreakEven     = true;          // Включить перенос в безубыток
@@ -341,65 +342,92 @@ void OnTick()
 //====================================================================
 
 //+------------------------------------------------------------------+
-//| Генерация торгового сигнала: EMA cross + RSI + MTF-тренд          |
-//| Возвращает SIGNAL_BUY / SIGNAL_SELL / SIGNAL_NONE                 |
+//| Генерация сигнала для СКАЛЬПИНГА:                                  |
+//|  Тренд-биас по состоянию EMA (emaFast vs emaSlow) —               |
+//|  ЧАСТЫЙ триггер по пересечению Stochastic %K/%D в сторону тренда.  |
+//|  RSI / ADX / MACD / Bollinger — опциональные фильтры (по input).  |
+//|  Если Stochastic выключен — триггером служит пересечение EMA.      |
 //+------------------------------------------------------------------+
 ENUM_SIGNAL CheckEntrySignal()
 {
-   double emaFast[3], emaSlow[3], rsi[2];
-
-   //--- Копируем данные закрытых баров (индекс 1 и 2) -------------
+   double emaFast[2], emaSlow[2];
    if(CopyBuffer(hEmaFast, 0, 1, 2, emaFast) < 2) return SIGNAL_NONE;
    if(CopyBuffer(hEmaSlow, 0, 1, 2, emaSlow) < 2) return SIGNAL_NONE;
-   if(CopyBuffer(hRsi,     0, 1, 1, rsi)     < 1) return SIGNAL_NONE;
 
-   // emaFast[0] = бар 1 (последний закрытый), emaFast[1] = бар 2
-   bool crossUp   = (emaFast[1] <= emaSlow[1]) && (emaFast[0] > emaSlow[0]);
-   bool crossDown = (emaFast[1] >= emaSlow[1]) && (emaFast[0] < emaSlow[0]);
+   //--- Тренд-биас по СОСТОЯНИЮ EMA (не по редкому пересечению) ----
+   bool biasBull = (emaFast[0] > emaSlow[0]);
+   bool biasBear = (emaFast[0] < emaSlow[0]);
+   if(!biasBull && !biasBear) return SIGNAL_NONE;
 
-   //--- Зазор между EMA при кроссе (отсекаем слабые пересечения) --
    double emaGapPips = MathAbs(emaFast[0] - emaSlow[0]) / PipSize();
    double adx = ADXValue();
 
-   //--- BUY: кросс вверх + RSI + MTF (2 ТФ) + ADX + зазор EMA ------
-   if(crossUp && rsi[0] < InpRsiBuyMax)
+   //--- Триггер входа ---------------------------------------------
+   bool trigUp = false, trigDown = false;
+   if(InpUseStochastic)
    {
+      // Частый триггер: пересечение %K/%D в сторону тренда
+      double k[2], d[2];
+      if(CopyBuffer(hStoch, 0, 1, 2, k) < 2) return SIGNAL_NONE; // %K (main)
+      if(CopyBuffer(hStoch, 1, 1, 2, d) < 2) return SIGNAL_NONE; // %D (signal)
+      trigUp   = (k[1] <= d[1]) && (k[0] > d[0]) && (k[0] < InpStochUpper);
+      trigDown = (k[1] >= d[1]) && (k[0] < d[0]) && (k[0] > InpStochLower);
+   }
+   else
+   {
+      // Резервный триггер: классическое пересечение EMA
+      trigUp   = (emaFast[1] <= emaSlow[1]) && (emaFast[0] > emaSlow[0]);
+      trigDown = (emaFast[1] >= emaSlow[1]) && (emaFast[0] < emaSlow[0]);
+   }
+
+   //--- RSI (опционально) -----------------------------------------
+   double rsiVal = 50.0;
+   if(InpUseRSI)
+   {
+      double rsi[1];
+      if(CopyBuffer(hRsi, 0, 1, 1, rsi) < 1) return SIGNAL_NONE;
+      rsiVal = rsi[0];
+   }
+
+   //--- BUY: тренд вверх + триггер вверх + опц. фильтры ------------
+   if(biasBull && trigUp)
+   {
+      if(InpUseRSI && rsiVal >= InpRsiBuyMax)
+      { Log(StringFormat("Отказ BUY: RSI %.1f >= %.1f (перекупл.)", rsiVal, InpRsiBuyMax)); return SIGNAL_NONE; }
       if(emaGapPips < InpMinEmaGapPips)
-      { Log(StringFormat("Отказ BUY: зазор EMA %.1f < %.1f", emaGapPips, InpMinEmaGapPips)); return SIGNAL_NONE; }
+      { Log(StringFormat("Отказ BUY: зазор EMA %.1f < %.1f (флет)", emaGapPips, InpMinEmaGapPips)); return SIGNAL_NONE; }
       if(!MultiTFAligned(SIGNAL_BUY))
       { Log("Отказ BUY: тренд на старших ТФ не совпадает"); return SIGNAL_NONE; }
       if(InpUseADX && adx < InpADXMinLevel)
       { Log(StringFormat("Отказ BUY: ADX %.1f < %.1f (флет)", adx, InpADXMinLevel)); return SIGNAL_NONE; }
-      if(!StochOK(SIGNAL_BUY))
-      { Log("Отказ BUY: Stochastic не подтверждает (перекупл./импульс вниз)"); return SIGNAL_NONE; }
       if(!MacdOK(SIGNAL_BUY))
-      { Log("Отказ BUY: MACD не подтверждает бычий импульс"); return SIGNAL_NONE; }
+      { Log("Отказ BUY: MACD не подтверждает импульс"); return SIGNAL_NONE; }
       if(!BollingerOK(SIGNAL_BUY))
-      { Log("Отказ BUY: цена выше верхней полосы Bollinger (растянуто)"); return SIGNAL_NONE; }
+      { Log("Отказ BUY: цена выше верхней полосы Bollinger"); return SIGNAL_NONE; }
 
-      Log(StringFormat("Сигнал BUY: EMA cross up (%.5f>%.5f), RSI=%.1f, ADX=%.1f, зазор=%.1f",
-                       emaFast[0], emaSlow[0], rsi[0], adx, emaGapPips));
+      Log(StringFormat("Сигнал BUY: тренд вверх + триггер, RSI=%.1f, ADX=%.1f, зазор=%.1f",
+                       rsiVal, adx, emaGapPips));
       return SIGNAL_BUY;
    }
 
-   //--- SELL: кросс вниз + RSI + MTF (2 ТФ) + ADX + зазор EMA ------
-   if(crossDown && rsi[0] > InpRsiSellMin)
+   //--- SELL: тренд вниз + триггер вниз + опц. фильтры -------------
+   if(biasBear && trigDown)
    {
+      if(InpUseRSI && rsiVal <= InpRsiSellMin)
+      { Log(StringFormat("Отказ SELL: RSI %.1f <= %.1f (перепрод.)", rsiVal, InpRsiSellMin)); return SIGNAL_NONE; }
       if(emaGapPips < InpMinEmaGapPips)
-      { Log(StringFormat("Отказ SELL: зазор EMA %.1f < %.1f", emaGapPips, InpMinEmaGapPips)); return SIGNAL_NONE; }
+      { Log(StringFormat("Отказ SELL: зазор EMA %.1f < %.1f (флет)", emaGapPips, InpMinEmaGapPips)); return SIGNAL_NONE; }
       if(!MultiTFAligned(SIGNAL_SELL))
       { Log("Отказ SELL: тренд на старших ТФ не совпадает"); return SIGNAL_NONE; }
       if(InpUseADX && adx < InpADXMinLevel)
       { Log(StringFormat("Отказ SELL: ADX %.1f < %.1f (флет)", adx, InpADXMinLevel)); return SIGNAL_NONE; }
-      if(!StochOK(SIGNAL_SELL))
-      { Log("Отказ SELL: Stochastic не подтверждает (перепрод./импульс вверх)"); return SIGNAL_NONE; }
       if(!MacdOK(SIGNAL_SELL))
-      { Log("Отказ SELL: MACD не подтверждает медвежий импульс"); return SIGNAL_NONE; }
+      { Log("Отказ SELL: MACD не подтверждает импульс"); return SIGNAL_NONE; }
       if(!BollingerOK(SIGNAL_SELL))
-      { Log("Отказ SELL: цена ниже нижней полосы Bollinger (растянуто)"); return SIGNAL_NONE; }
+      { Log("Отказ SELL: цена ниже нижней полосы Bollinger"); return SIGNAL_NONE; }
 
-      Log(StringFormat("Сигнал SELL: EMA cross down (%.5f<%.5f), RSI=%.1f, ADX=%.1f, зазор=%.1f",
-                       emaFast[0], emaSlow[0], rsi[0], adx, emaGapPips));
+      Log(StringFormat("Сигнал SELL: тренд вниз + триггер, RSI=%.1f, ADX=%.1f, зазор=%.1f",
+                       rsiVal, adx, emaGapPips));
       return SIGNAL_SELL;
    }
 
@@ -442,24 +470,6 @@ double ADXValue()
    double adx[1];
    if(CopyBuffer(hAdx, 0, 1, 1, adx) < 1) return 0.0;
    return adx[0];
-}
-
-//+------------------------------------------------------------------+
-//| Stochastic: импульс + отсечение перекупленности/перепроданности   |
-//| BUY: %K ниже верхнего уровня И %K выше %D (импульс вверх).         |
-//| SELL: %K выше нижнего уровня И %K ниже %D (импульс вниз).          |
-//+------------------------------------------------------------------+
-bool StochOK(ENUM_SIGNAL sig)
-{
-   if(!InpUseStochastic) return true;
-   double main[1], signal[1];
-   if(CopyBuffer(hStoch, 0, 1, 1, main)   < 1) return true; // 0 = %K (main)
-   if(CopyBuffer(hStoch, 1, 1, 1, signal) < 1) return true; // 1 = %D (signal)
-
-   if(sig == SIGNAL_BUY)
-      return (main[0] < InpStochUpper && main[0] >= signal[0]);
-   else
-      return (main[0] > InpStochLower && main[0] <= signal[0]);
 }
 
 //+------------------------------------------------------------------+
