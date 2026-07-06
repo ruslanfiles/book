@@ -56,10 +56,10 @@ input int      InpAtrPeriod        = 14;            // Период ATR
 //--- Мультитаймфрейм и качество входа ------------------------------
 input group "=== MTF И КАЧЕСТВО ВХОДА ==="
 input ENUM_TIMEFRAMES InpTrendTF2  = PERIOD_W1;     // Второй старший ТФ — недельный тренд
-input bool     InpUseTrendTF2      = true;          // Требовать совпадение и с недельным трендом
-input bool     InpUseADX           = true;          // Фильтр силы тренда ADX (вход только в сильном тренде)
+input bool     InpUseTrendTF2      = false;         // W1 как жёсткий фильтр ВЫКЛ (нужен ~год истории; блокирует всё). Только анализ
+input bool     InpUseADX           = true;          // Фильтр силы тренда ADX
 input int      InpADXPeriod        = 14;            // Период ADX
-input double   InpADXMinLevel      = 23.0;          // Мин. ADX для входа (сильный тренд)
+input double   InpADXMinLevel      = 20.0;          // Мин. ADX для входа (смягчено с 23)
 input double   InpMinEmaGapPips    = 20.0;          // Мин. зазор между EMA при кроссе (для H4 больше)
 
 //--- Скальпинг-индикаторы (доп. подтверждение входа) ---------------
