@@ -134,6 +134,7 @@ input string   InpTelegramToken    = "8507213977:AAEugqHLl804tgCiYZJqRDXbAl43ONS
 input string   InpTelegramChatID   = "1978497895";  // Telegram Chat ID
 input bool     InpUsePush          = false;         // Push-уведомления MetaTrader
 input bool     InpLogToFile        = true;          // Логировать в файл
+input bool     InpVerboseLog       = false;         // Подробный лог (смена дня, отказы фильтров). Выкл = меньше спама
 input bool     InpShowDashboard    = true;          // Показывать панель на графике
 
 //====================================================================
@@ -720,7 +721,7 @@ void UpdateAccountState()
       g_currentDay = dt.day;
       g_dayStartBalance = balance;
       g_dayHalted = false;
-      Log("Новый торговый день. Дневной учёт сброшен. Баланс=" + DoubleToString(balance,2));
+      LogVerbose("Новый торговый день. Дневной учёт сброшен. Баланс=" + DoubleToString(balance,2));
    }
 
    //--- Обновление пика эквити ------------------------------------
@@ -1219,6 +1220,7 @@ void Log(string message)
    Print(line);
 
    if(!InpLogToFile) return;
+   // (продолжение ниже)
 
    int h = FileOpen(g_logFileName, FILE_READ|FILE_WRITE|FILE_TXT|FILE_ANSI);
    if(h != INVALID_HANDLE)
@@ -1227,6 +1229,16 @@ void Log(string message)
       FileWriteString(h, line + "\r\n");
       FileClose(h);
    }
+}
+
+//+------------------------------------------------------------------+
+//| Подробный лог: пишется только при InpVerboseLog=true              |
+//| (смена дня, отказы фильтров — чтобы не засорять журнал)           |
+//+------------------------------------------------------------------+
+void LogVerbose(string message)
+{
+   if(InpVerboseLog)
+      Log(message);
 }
 
 //+------------------------------------------------------------------+
