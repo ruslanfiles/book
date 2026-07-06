@@ -43,7 +43,7 @@ input int      InpRetryDelayMs     = 500;           // Пауза между п�
 input group "=== СТРАТЕГИЯ (СИГНАЛЫ) ==="
 input ENUM_TIMEFRAMES InpWorkTF    = PERIOD_M5;     // Рабочий таймфрейм (скальпинг)
 input ENUM_TIMEFRAMES InpTrendTF   = PERIOD_M15;    // Старший ТФ для MTF-фильтра
-input bool     InpUseMTFFilter     = true;          // Включить мультитаймфрейм-фильтр
+input bool     InpUseMTFFilter     = false;         // Требовать совпадение тренда на старшем ТФ (для скальпинга выкл.)
 input int      InpEmaFast          = 5;             // EMA быстрая (скальпинг)
 input int      InpEmaSlow          = 13;            // EMA медленная (скальпинг)
 input int      InpEmaTrend         = 50;            // EMA тренда (на старшем ТФ M15)
@@ -55,11 +55,27 @@ input int      InpAtrPeriod        = 14;            // Период ATR
 //--- Мультитаймфрейм и качество входа ------------------------------
 input group "=== MTF И КАЧЕСТВО ВХОДА ==="
 input ENUM_TIMEFRAMES InpTrendTF2  = PERIOD_H1;     // Второй старший ТФ (доп. подтверждение)
-input bool     InpUseTrendTF2      = true;          // Требовать совпадение тренда и на 2-м ТФ
+input bool     InpUseTrendTF2      = false;         // Требовать совпадение тренда и на 2-м ТФ (для скальпинга выкл.)
 input bool     InpUseADX           = true;          // Фильтр силы тренда ADX (против флета)
 input int      InpADXPeriod        = 14;            // Период ADX
 input double   InpADXMinLevel      = 22.0;          // Мин. ADX для входа (ниже — флет, стоп)
 input double   InpMinEmaGapPips    = 3.0;           // Мин. зазор между EMA при кроссе (пункты)
+
+//--- Скальпинг-индикаторы (доп. подтверждение входа) ---------------
+input group "=== СКАЛЬПИНГ-ИНДИКАТОРЫ ==="
+input bool     InpUseStochastic    = true;          // Стохастик: импульс + фильтр перекупл./перепрод.
+input int      InpStochK           = 5;             // Стохастик %K (для M5: 5 или 9)
+input int      InpStochD           = 3;             // Стохастик %D
+input int      InpStochSlowing     = 3;             // Стохастик замедление
+input double   InpStochUpper       = 80.0;          // Верхний уровень (не покупать выше)
+input double   InpStochLower       = 20.0;          // Нижний уровень (не продавать ниже)
+input bool     InpUseMACD          = true;          // MACD: подтверждение направления импульса
+input int      InpMacdFast         = 12;            // MACD быстрая EMA
+input int      InpMacdSlow         = 26;            // MACD медленная EMA
+input int      InpMacdSignal       = 9;             // MACD сигнальная линия
+input bool     InpUseBollinger     = false;         // Bollinger: не входить на растянутом крае канала
+input int      InpBBPeriod         = 20;            // Bollinger период
+input double   InpBBDeviation      = 2.0;           // Bollinger отклонение (кол-во σ)
 
 //--- Защита от серии убытков ---------------------------------------
 input group "=== ЗАЩИТА ОТ СЕРИИ УБЫТКОВ ==="
@@ -133,6 +149,9 @@ int hAtr       = INVALID_HANDLE;
 int hEmaTrend  = INVALID_HANDLE;   // старший ТФ (TF1)
 int hEmaTrend2 = INVALID_HANDLE;   // второй старший ТФ (TF2)
 int hAdx       = INVALID_HANDLE;   // ADX (сила тренда)
+int hStoch     = INVALID_HANDLE;   // Stochastic (импульс)
+int hMacd      = INVALID_HANDLE;   // MACD (импульс)
+int hBB        = INVALID_HANDLE;   // Bollinger Bands (края канала)
 
 //--- Состояние учёта -----------------------------------------------
 double   g_dayStartBalance = 0.0;   // Баланс на начало дня
@@ -177,10 +196,14 @@ int OnInit()
    hEmaTrend = iMA(_Symbol, InpTrendTF, InpEmaTrend, 0, MODE_EMA, PRICE_CLOSE);
    hEmaTrend2= iMA(_Symbol, InpTrendTF2, InpEmaTrend, 0, MODE_EMA, PRICE_CLOSE);
    hAdx      = iADX(_Symbol, InpWorkTF, InpADXPeriod);
+   hStoch    = iStochastic(_Symbol, InpWorkTF, InpStochK, InpStochD, InpStochSlowing, MODE_SMA, STO_LOWHIGH);
+   hMacd     = iMACD(_Symbol, InpWorkTF, InpMacdFast, InpMacdSlow, InpMacdSignal, PRICE_CLOSE);
+   hBB       = iBands(_Symbol, InpWorkTF, InpBBPeriod, 0, InpBBDeviation, PRICE_CLOSE);
 
    if(hEmaFast==INVALID_HANDLE || hEmaSlow==INVALID_HANDLE ||
       hRsi==INVALID_HANDLE || hAtr==INVALID_HANDLE || hEmaTrend==INVALID_HANDLE ||
-      hEmaTrend2==INVALID_HANDLE || hAdx==INVALID_HANDLE)
+      hEmaTrend2==INVALID_HANDLE || hAdx==INVALID_HANDLE ||
+      hStoch==INVALID_HANDLE || hMacd==INVALID_HANDLE || hBB==INVALID_HANDLE)
    {
       Print("Ошибка создания хендлов индикаторов. Код: ", GetLastError());
       return(INIT_FAILED);
@@ -239,6 +262,9 @@ void OnDeinit(const int reason)
    if(hEmaTrend!=INVALID_HANDLE) IndicatorRelease(hEmaTrend);
    if(hEmaTrend2!=INVALID_HANDLE)IndicatorRelease(hEmaTrend2);
    if(hAdx!=INVALID_HANDLE)      IndicatorRelease(hAdx);
+   if(hStoch!=INVALID_HANDLE)    IndicatorRelease(hStoch);
+   if(hMacd!=INVALID_HANDLE)     IndicatorRelease(hMacd);
+   if(hBB!=INVALID_HANDLE)       IndicatorRelease(hBB);
 
    //--- Чистим панель ---------------------------------------------
    ObjectsDeleteAll(0, "TMD_");
@@ -344,6 +370,12 @@ ENUM_SIGNAL CheckEntrySignal()
       { Log("Отказ BUY: тренд на старших ТФ не совпадает"); return SIGNAL_NONE; }
       if(InpUseADX && adx < InpADXMinLevel)
       { Log(StringFormat("Отказ BUY: ADX %.1f < %.1f (флет)", adx, InpADXMinLevel)); return SIGNAL_NONE; }
+      if(!StochOK(SIGNAL_BUY))
+      { Log("Отказ BUY: Stochastic не подтверждает (перекупл./импульс вниз)"); return SIGNAL_NONE; }
+      if(!MacdOK(SIGNAL_BUY))
+      { Log("Отказ BUY: MACD не подтверждает бычий импульс"); return SIGNAL_NONE; }
+      if(!BollingerOK(SIGNAL_BUY))
+      { Log("Отказ BUY: цена выше верхней полосы Bollinger (растянуто)"); return SIGNAL_NONE; }
 
       Log(StringFormat("Сигнал BUY: EMA cross up (%.5f>%.5f), RSI=%.1f, ADX=%.1f, зазор=%.1f",
                        emaFast[0], emaSlow[0], rsi[0], adx, emaGapPips));
@@ -359,6 +391,12 @@ ENUM_SIGNAL CheckEntrySignal()
       { Log("Отказ SELL: тренд на старших ТФ не совпадает"); return SIGNAL_NONE; }
       if(InpUseADX && adx < InpADXMinLevel)
       { Log(StringFormat("Отказ SELL: ADX %.1f < %.1f (флет)", adx, InpADXMinLevel)); return SIGNAL_NONE; }
+      if(!StochOK(SIGNAL_SELL))
+      { Log("Отказ SELL: Stochastic не подтверждает (перепрод./импульс вверх)"); return SIGNAL_NONE; }
+      if(!MacdOK(SIGNAL_SELL))
+      { Log("Отказ SELL: MACD не подтверждает медвежий импульс"); return SIGNAL_NONE; }
+      if(!BollingerOK(SIGNAL_SELL))
+      { Log("Отказ SELL: цена ниже нижней полосы Bollinger (растянуто)"); return SIGNAL_NONE; }
 
       Log(StringFormat("Сигнал SELL: EMA cross down (%.5f<%.5f), RSI=%.1f, ADX=%.1f, зазор=%.1f",
                        emaFast[0], emaSlow[0], rsi[0], adx, emaGapPips));
@@ -404,6 +442,58 @@ double ADXValue()
    double adx[1];
    if(CopyBuffer(hAdx, 0, 1, 1, adx) < 1) return 0.0;
    return adx[0];
+}
+
+//+------------------------------------------------------------------+
+//| Stochastic: импульс + отсечение перекупленности/перепроданности   |
+//| BUY: %K ниже верхнего уровня И %K выше %D (импульс вверх).         |
+//| SELL: %K выше нижнего уровня И %K ниже %D (импульс вниз).          |
+//+------------------------------------------------------------------+
+bool StochOK(ENUM_SIGNAL sig)
+{
+   if(!InpUseStochastic) return true;
+   double main[1], signal[1];
+   if(CopyBuffer(hStoch, 0, 1, 1, main)   < 1) return true; // 0 = %K (main)
+   if(CopyBuffer(hStoch, 1, 1, 1, signal) < 1) return true; // 1 = %D (signal)
+
+   if(sig == SIGNAL_BUY)
+      return (main[0] < InpStochUpper && main[0] >= signal[0]);
+   else
+      return (main[0] > InpStochLower && main[0] <= signal[0]);
+}
+
+//+------------------------------------------------------------------+
+//| MACD: подтверждение направления импульса (main vs signal)         |
+//| BUY: main > signal. SELL: main < signal.                          |
+//+------------------------------------------------------------------+
+bool MacdOK(ENUM_SIGNAL sig)
+{
+   if(!InpUseMACD) return true;
+   double main[1], signal[1];
+   if(CopyBuffer(hMacd, 0, 1, 1, main)   < 1) return true; // 0 = MACD main
+   if(CopyBuffer(hMacd, 1, 1, 1, signal) < 1) return true; // 1 = signal
+
+   if(sig == SIGNAL_BUY)  return (main[0] > signal[0]);
+   else                   return (main[0] < signal[0]);
+}
+
+//+------------------------------------------------------------------+
+//| Bollinger Bands: не входить на растянутом крае канала             |
+//| BUY блокируется если цена выше верхней полосы; SELL — ниже нижней. |
+//+------------------------------------------------------------------+
+bool BollingerOK(ENUM_SIGNAL sig)
+{
+   if(!InpUseBollinger) return true;
+   double upper[1], lower[1];
+   if(CopyBuffer(hBB, 1, 1, 1, upper) < 1) return true; // 1 = upper band
+   if(CopyBuffer(hBB, 2, 1, 1, lower) < 1) return true; // 2 = lower band
+
+   double price = iClose(_Symbol, InpWorkTF, 1);
+   if(price <= 0.0) return true;
+
+   if(sig == SIGNAL_BUY  && price > upper[0]) return false;
+   if(sig == SIGNAL_SELL && price < lower[0]) return false;
+   return true;
 }
 
 //+------------------------------------------------------------------+
@@ -1202,7 +1292,7 @@ string UrlEncode(string text)
 void CreateDashboard()
 {
    CreateLabel("TMD_title", "TrendMasterEA", 10, 20, clrGold, 11, true);
-   for(int i=1; i<=9; i++)
+   for(int i=1; i<=10; i++)
       CreateLabel("TMD_line"+(string)i, "", 10, 20+i*18, clrWhite, 9, false);
 }
 
@@ -1263,6 +1353,14 @@ void UpdateDashboard()
                    (SessionOK()?"Сессия✔ ":"Сессия✗ ") +
                    (SpreadOK()?"Спред✔ ":"Спред✗ ") +
                    (VolatilityOK()?"ATR✔":"ATR✗"));
+
+   //--- Анализ старших ТФ (информационно, без блокировки входа) ---
+   ENUM_SIGNAL t1 = TrendDirectionTF(hEmaTrend, InpTrendTF);
+   ENUM_SIGNAL t2 = TrendDirectionTF(hEmaTrend2, InpTrendTF2);
+   string s1 = (t1==SIGNAL_BUY?"BUY":(t1==SIGNAL_SELL?"SELL":"-"));
+   string s2 = (t2==SIGNAL_BUY?"BUY":(t2==SIGNAL_SELL?"SELL":"-"));
+   ObjectSetString(0, "TMD_line10", OBJPROP_TEXT, StringFormat("Тренд MTF: %s=%s | %s=%s (анализ)",
+                   EnumToString(InpTrendTF), s1, EnumToString(InpTrendTF2), s2));
    ChartRedraw();
 }
 //+------------------------------------------------------------------+
