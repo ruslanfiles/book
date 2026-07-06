@@ -82,11 +82,11 @@ input int      InpMaxPerSymbol     = 1;             // Макс. позиций 
 input group "=== ФИЛЬТРЫ БЕЗОПАСНОСТИ ==="
 input double   InpMaxSpreadPips    = 40.0;          // Макс. спред (пункты цены; золото ~20-35)
 input bool     InpUseSessionFilter = true;          // Фильтр торговой сессии
-input int      InpSessionStartHour = 9;             // Начало торговли (час сервера; актив. золота)
-input int      InpSessionEndHour   = 20;            // Конец торговли (час сервера)
+input int      InpSessionStartHour = 1;             // Начало торговли (час сервера)
+input int      InpSessionEndHour   = 23;            // Конец торговли (час сервера)
 input bool     InpUseVolatilityFlt = true;          // Фильтр по волатильности ATR
-input double   InpAtrMinPips       = 20.0;          // Мин. ATR для входа (пункты цены)
-input double   InpAtrMaxPips       = 800.0;         // Макс. ATR для входа (пункты цены)
+input double   InpAtrMinPips       = 5.0;           // Мин. ATR для входа (пункты цены; широко)
+input double   InpAtrMaxPips       = 5000.0;        // Макс. ATR для входа (пункты цены; широко)
 input bool     InpUseNewsFilter    = true;          // Фильтр новостей (кален. MQL5)
 input int      InpNewsMinsBefore   = 15;            // Стоп торговли за N мин до новости
 input int      InpNewsMinsAfter    = 15;            // Стоп торговли N мин после новости
@@ -366,9 +366,27 @@ double GetATR()
 //+------------------------------------------------------------------+
 bool PassAllFilters(ENUM_SIGNAL signal)
 {
-   if(!SpreadOK())       { Log("Фильтр: спред слишком высокий — вход отменён"); return false; }
-   if(!SessionOK())      { Log("Фильтр: вне торговой сессии — вход отменён");    return false; }
-   if(!VolatilityOK())   { Log("Фильтр: ATR вне допустимого диапазона");         return false; }
+   //--- Каждый отказ логируем с фактическими значениями (для тюнинга) ---
+   if(!SpreadOK())
+   {
+      double sp = (double)SymbolInfoInteger(_Symbol, SYMBOL_SPREAD) * _Point / PipSize();
+      Log(StringFormat("Фильтр СПРЕД: факт %.1f > лимит %.1f — вход отменён", sp, InpMaxSpreadPips));
+      return false;
+   }
+   if(!SessionOK())
+   {
+      MqlDateTime dt; TimeToStruct(TimeCurrent(), dt);
+      Log(StringFormat("Фильтр СЕССИЯ: час %d вне окна [%d..%d) — вход отменён",
+                       dt.hour, InpSessionStartHour, InpSessionEndHour));
+      return false;
+   }
+   if(!VolatilityOK())
+   {
+      double atrPips = GetATR() / PipSize();
+      Log(StringFormat("Фильтр ATR: факт %.1f вне диапазона [%.1f..%.1f] — вход отменён",
+                       atrPips, InpAtrMinPips, InpAtrMaxPips));
+      return false;
+   }
    if(!WeekendOK())      { Log("Фильтр: приближаются выходные — вход отменён");   return false; }
    if(!NewsOK())         { Log("Фильтр: рядом важная новость — вход отменён");    return false; }
    return true;
